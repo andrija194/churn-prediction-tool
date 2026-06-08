@@ -1,61 +1,67 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pickle
+import joblib
+import matplotlib.pyplot as plt
+import sys
 import os
 import warnings
 warnings.filterwarnings('ignore')
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+from data_preprocessing import run_preprocessing
+
+# ===== PODEŠAVANJE STRANICE =====
 st.set_page_config(page_title="Churn Predictor", page_icon="🔮", layout="wide")
 st.title("🔮 Churn Prediction Tool")
 st.markdown("---")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = os.path.join(BASE_DIR, '..', 'models')
-DATA_DIR = os.path.join(BASE_DIR, '..', 'data', 'raw')
-
+# ===== UČITAVANJE =====
 @st.cache_resource
 def load_models():
-    with open(os.path.join(MODEL_DIR, 'xgboost_model.pkl'), 'rb') as f:
-        model = pickle.load(f)
-    with open(os.path.join(MODEL_DIR, 'scaler.pkl'), 'rb') as f:
-        scaler = pickle.load(f)
-    return model, scaler
+    model = joblib.load('models/xgboost_model.pkl')
+    scaler = joblib.load('models/scaler.pkl')
+    feature_names = pd.read_csv('models/feature_names.csv').iloc[:, 0].tolist()
+    importance = pd.read_csv('models/feature_importance.csv')
+    return model, scaler, feature_names, importance
 
 @st.cache_data
-def load_data():
-    return pd.read_csv(os.path.join(DATA_DIR, 'WA_Telco_Customer_Churn.csv'))
+def get_data():
+    X, y = run_preprocessing()
+    df = pd.read_csv('data/raw/WA_Telco_Customer_Churn.csv')
+    return X, y, df
 
 try:
-    model, scaler = load_models()
-    df_orig = load_data()
+    model, scaler, feature_names, importance = load_models()
+    X, y, df_orig = get_data()
 except Exception as e:
-    st.error(f"Greška pri učitavanju: {e}")
+    st.error(f"Greška: {e}")
     st.stop()
 
-# Predikcije
-df_orig['TotalCharges'] = pd.to_numeric(df_orig['TotalCharges'], errors='coerce').fillna(0)
-proba = 0.15 + 0.35 * (df_orig['MonthlyCharges'] / df_orig['MonthlyCharges'].max()) + \
-        0.15 * (1 - df_orig['tenure'] / df_orig['tenure'].max())
-proba = np.clip(proba, 0, 1)
+# ===== PREDIKCIJE =====
+proba = model.predict_proba(X)[:, 1]
 df_orig['Risk'] = proba
 df_orig['ExpectedLoss'] = proba * df_orig['MonthlyCharges']
-df_orig['RiskLevel'] = pd.cut(proba, bins=[0, 0.3, 0.7, 1], 
-                               labels=['🟢 Nizak', '🟡 Srednji', '🔴 Visok'])
+df_orig['RiskLevel'] = pd.cut(proba, bins=[0, 0.3, 0.7, 1], labels=['🟢 Nizak', '🟡 Srednji', '🔴 Visok'])
 
+# ===== SIDEBAR =====
 st.sidebar.header("🔍 Filteri")
 prag = st.sidebar.slider("Prag rizika", 0.0, 1.0, 0.5, 0.05)
+
 df_risk = df_orig[df_orig['Risk'] >= prag].sort_values('ExpectedLoss', ascending=False)
 
+# ===== KPI =====
 c1, c2, c3 = st.columns(3)
 c1.metric("🔴 Rizični korisnici", len(df_risk))
 c2.metric("💰 Očekivani gubitak", f"${df_risk['ExpectedLoss'].sum():,.0f}")
-c3.metric("📈 Prosečan rizik", f"{df_risk['Risk'].mean():.1%}" if len(df_risk)>0 else "0%")
+c3.metric("📈 Prosečan rizik", f"{df_risk['Risk'].mean():.1%}" if len(df_risk) > 0 else "0%")
 
 st.markdown("---")
+
+# ===== TABELA =====
 st.subheader("📋 Lista rizičnih korisnika")
 st.dataframe(
-    df_risk[['customerID','Risk','ExpectedLoss','RiskLevel','MonthlyCharges','tenure','Contract','InternetService']],
+    df_risk[['customerID', 'Risk', 'ExpectedLoss', 'RiskLevel', 'MonthlyCharges', 'tenure', 'Contract', 'InternetService']],
     column_config={
         "Risk": st.column_config.ProgressColumn("Rizik", format="%.1f%%", min_value=0, max_value=1),
         "ExpectedLoss": st.column_config.NumberColumn("Očekivani gubitak", format="$%.2f"),
@@ -64,34 +70,61 @@ st.dataframe(
 )
 
 st.markdown("---")
+
+# ===== DETALJI =====
 st.subheader("🔍 Detalji korisnika")
 ids = df_risk['customerID'].head(20).tolist()
 if ids:
     izabran = st.selectbox("Izaberi korisnika:", ids)
-    k = df_risk[df_risk['customerID']==izabran].iloc[0]
-    ca, cb = st.columns(2)
-    with ca:
+    korisnik = df_risk[df_risk['customerID'] == izabran].iloc[0]
+
+    cA, cB = st.columns(2)
+    with cA:
         st.markdown(f"""
-| Atribut | Vrednost |
-|---------|----------|
-| ID | {k['customerID']} |
-| Rizik | {k['Risk']:.1%} |
-| Očekivani gubitak | ${k['ExpectedLoss']:,.2f} |
-| Mesečni trošak | ${k['MonthlyCharges']:,.2f} |
-| Staž | {k['tenure']} meseci |
-| Ugovor | {k['Contract']} |
-| Internet | {k['InternetService']} |
+        | Atribut | Vrednost |
+        |---------|----------|
+        | ID | {korisnik['customerID']} |
+        | Rizik | {korisnik['Risk']:.1%} |
+        | Očekivani gubitak | ${korisnik['ExpectedLoss']:,.2f} |
+        | Mesečni trošak | ${korisnik['MonthlyCharges']:,.2f} |
+        | Staž | {korisnik['tenure']} meseci |
+        | Ugovor | {korisnik['Contract']} |
+        | Internet | {korisnik['InternetService']} |
         """)
-    with cb:
+    with cB:
         st.markdown("### 💡 Preporuke")
-        if k['MonthlyCharges'] > df_orig['MonthlyCharges'].median():
+        if korisnik['MonthlyCharges'] > df_orig['MonthlyCharges'].median():
             st.info("🎯 Ponuditi 20% popusta na 6 meseci")
-        if k['tenure'] < 12:
+        if korisnik['tenure'] < 12:
             st.info("📞 Pozvati radi provere zadovoljstva")
-        if k['Contract'] == 'Month-to-month':
+        if korisnik['Contract'] == 'Month-to-month':
             st.info("📋 Ponuditi godišnji ugovor sa popustom")
-        if k['InternetService'] == 'Fiber optic':
+        if korisnik['InternetService'] == 'Fiber optic':
             st.info("⬆️ Besplatna nadogradnja premium kanala")
+
+    # ===== VIZUALIZACIJE =====
+    st.markdown("---")
+    col_v1, col_v2 = st.columns(2)
+
+    with col_v1:
+        st.markdown("### 📊 Distribucija rizika")
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.hist(proba, bins=30, color='steelblue', edgecolor='white', alpha=0.8)
+        ax.axvline(x=korisnik['Risk'], color='red', linestyle='--', linewidth=2, label='Odabrani')
+        ax.axvline(x=prag, color='orange', linestyle=':', linewidth=2, label='Prag')
+        ax.set_xlabel('Churn Probability')
+        ax.set_ylabel('Broj korisnika')
+        ax.legend()
+        st.pyplot(fig)
+
+    with col_v2:
+        st.markdown("### 📈 Top 10 feature-a")
+        fig2, ax2 = plt.subplots(figsize=(6, 4))
+        top10 = importance.head(10)
+        ax2.barh(top10['feature'], top10['importance'], color='steelblue')
+        ax2.set_xlabel('Importance')
+        ax2.invert_yaxis()
+        st.pyplot(fig2)
 
 st.markdown("---")
 st.caption("Churn Prediction Tool © 2026 | Andrija Gojković")
