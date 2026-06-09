@@ -29,3 +29,4 @@ pip install -r requirements.txt
 python src/churn_model.py
 python src/survival_analysis.py
 streamlit run app/main.py
+
