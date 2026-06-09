@@ -145,9 +145,9 @@ if ids:
         # Monthly Charges
         med = df_orig['MonthlyCharges'].median()
         if korisnik['MonthlyCharges'] > med:
-            razlozi.append(("🔴", f"Visoki troškovi: ${korisnik['MonthlyCharges']:.0f}", f"Prosek je ${med:.0f} (+15% rizika)"))
+                        razlozi.append(("🔴", f"Visoki mesečni troškovi", f"${korisnik['MonthlyCharges']:.0f}"))
         else:
-            razlozi.append(("🟢", f"Pristupačni troškovi: ${korisnik['MonthlyCharges']:.0f}", f"Prosek je ${med:.0f}"))
+                                    razlozi.append(("🟢", f"Pristupačni mesečni troškovi", f"${korisnik['MonthlyCharges']:.0f}"))
         
         # Tenure
         if korisnik['tenure'] < 12:
