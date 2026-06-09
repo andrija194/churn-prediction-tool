@@ -1,6 +1,6 @@
 # 🔮 Churn Prediction & Retention Tool
 
-**Predmet:** Mašinsko učenje - Praktični projekat  
+**Predmet:** Informacioni sistemi za podršku odlučivanju - Praktični projekat  
 **Student:** Andrija Gojković  
 **Datum:** Jun 2026.
 
@@ -13,6 +13,7 @@ Alat za predikciju churn-a u telekomunikacionoj kompaniji koji:
 - Objašnjava razloge rizika
 - Predlaže akcije za zadržavanje
 - Računa očekivani ROI
+- What-if simulacija za optimizaciju strategije
 
 **Dataset:** Telco Customer Churn (Kaggle)
 
@@ -30,3 +31,4 @@ python src/churn_model.py
 python src/survival_analysis.py
 streamlit run app/main.py
 
+https://churn-prediction-tool-qkx3qrvu2u7ppgbp5zqy4a.streamlit.app/
