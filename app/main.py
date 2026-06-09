@@ -45,17 +45,12 @@ df_orig['ExpectedLoss'] = proba * df_orig['MonthlyCharges']
 df_orig['RiskLevel'] = pd.cut(proba, bins=[0, 0.3, 0.7, 1.01], 
                                labels=['🟢 Nizak', '🟡 Srednji', '🔴 Visok'])
 
-# NOVI UPLIFT MODEL - različiti skorovi za svaku akciju
+# UPLIFT MODEL - različiti skorovi za svaku akciju
 def calculate_uplift(row):
-    """
-    Računa uplift za svaku vrstu intervencije posebno.
-    Vraća (najveći_uplift, ime_najbolje_akcije, dict_sa_svim_upliftovima)
-    """
     uplift_discount = 0.0
     uplift_contract = 0.0
     uplift_premium = 0.0
 
-    # Popust – visoki troškovi = veća osetljivost na popust
     if row['MonthlyCharges'] > 90:
         uplift_discount = 0.35
     elif row['MonthlyCharges'] > 70:
@@ -65,18 +60,16 @@ def calculate_uplift(row):
     else:
         uplift_discount = 0.05
 
-    # Godišnji ugovor – mesečni korisnici najviše reaguju
     if row['Contract'] == 'Month-to-month':
         if row['tenure'] < 12:
-            uplift_contract = 0.40   # novi + mesečni → jako reaguju
+            uplift_contract = 0.40
         elif row['tenure'] < 24:
             uplift_contract = 0.30
         else:
             uplift_contract = 0.20
     else:
-        uplift_contract = 0.05  # već ima ugovor, slabo reaguje
+        uplift_contract = 0.05
 
-    # Premium nadogradnja – fiber korisnici reaguju
     if row['InternetService'] == 'Fiber optic':
         if row['MonthlyCharges'] > 80:
             uplift_premium = 0.30
@@ -98,7 +91,6 @@ def calculate_uplift(row):
 
     return best_uplift, best_action, uplifts
 
-# Primeni uplift i sačuvaj sve vrednosti
 uplift_results = df_orig.apply(calculate_uplift, axis=1)
 df_orig['UpliftScore'] = uplift_results.apply(lambda x: x[0])
 df_orig['BestAction'] = uplift_results.apply(lambda x: x[1])
@@ -108,19 +100,27 @@ df_orig['UpliftPremium'] = uplift_results.apply(lambda x: x[2]['Premium nadograd
 
 # ===== SIDEBAR =====
 st.sidebar.header("🔍 Filteri")
-prag = st.sidebar.slider("Prag rizika", 0.0, 1.0, 0.5, 0.05)
+prag = st.sidebar.slider("Prag rizika", 0.0, 1.0, 0.5, 0.05,
+                         help="Prikaži korisnike sa rizikom iznad ovog praga")
 
 st.sidebar.markdown("---")
 st.sidebar.header("💰 ROI Kalkulator")
-discount_pct = st.sidebar.slider("Popust (%)", 5, 50, 20, 5)
-cost_per_user = st.sidebar.number_input("Cena po korisniku ($)", 10, 200, 50, 10)
+discount_pct = st.sidebar.slider("Popust (%)", 5, 50, 20, 5,
+                                 help="Koliki popust nudimo rizičnim korisnicima")
+cost_per_user = st.sidebar.number_input("Cena po korisniku ($)", 10, 200, 50, 10,
+                                        help="Koliko nas košta intervencija po korisniku")
 
 df_risk = df_orig[df_orig['Risk'] >= prag].sort_values('ExpectedLoss', ascending=False)
 
-# ROI računica (koristi najbolji uplift)
+# ROI računica - POPUST UTIČE NA UPLIFT
 expected_loss_total = df_risk['ExpectedLoss'].sum()
 avg_uplift = df_risk['UpliftScore'].mean() if len(df_risk) > 0 else 0
-saved_revenue = expected_loss_total * avg_uplift
+
+# Veći popust = veći efektivni uplift
+discount_factor = 1 + (discount_pct / 100)
+effective_uplift = min(avg_uplift * discount_factor, 0.95)
+
+saved_revenue = expected_loss_total * effective_uplift
 campaign_cost = len(df_risk) * cost_per_user
 roi = ((saved_revenue - campaign_cost) / campaign_cost * 100) if campaign_cost > 0 else 0
 
@@ -129,11 +129,11 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("🔴 Rizični korisnici", len(df_risk))
 c2.metric("💰 Očekivani gubitak", f"${expected_loss_total:,.0f}")
 c3.metric("📈 Spašeni prihod", f"${saved_revenue:,.0f}")
-c4.metric("🎯 ROI", f"{roi:.0f}%")
+c4.metric("🎯 ROI", f"{roi:.0f}%", delta="Pozitivan" if roi > 0 else "Negativan")
 
 st.markdown("---")
 
-# ===== TABELA SA UPLIFT-om =====
+# ===== TABELA =====
 st.subheader("📋 Rangirana lista rizičnih korisnika (prioritet po očekivanom gubitku)")
 st.dataframe(
     df_risk[['customerID', 'Risk', 'ExpectedLoss', 'UpliftScore', 'BestAction', 'RiskLevel', 
@@ -180,7 +180,6 @@ if ids:
         
         razlozi = []
         
-        # Contract
         if korisnik['Contract'] == 'Month-to-month':
             razlozi.append(("🔴", "Mesečni ugovor", "+25% rizika"))
         elif korisnik['Contract'] == 'One year':
@@ -188,14 +187,12 @@ if ids:
         else:
             razlozi.append(("🟢", "Dvogodišnji ugovor", "značajno smanjuje rizik"))
         
-        # Monthly Charges
         med = df_orig['MonthlyCharges'].median()
         if korisnik['MonthlyCharges'] > med:
             razlozi.append(("🔴", "Visoki mesečni troškovi", f"${korisnik['MonthlyCharges']:.0f}"))
         else:
             razlozi.append(("🟢", "Pristupačni mesečni troškovi", f"${korisnik['MonthlyCharges']:.0f}"))
         
-        # Tenure
         if korisnik['tenure'] < 12:
             razlozi.append(("🔴", f"Nov korisnik ({korisnik['tenure']} mes.)", "+10% rizika"))
         elif korisnik['tenure'] < 24:
@@ -205,7 +202,6 @@ if ids:
         else:
             razlozi.append(("🟢", f"Lojalan korisnik ({korisnik['tenure']} mes.)", "značajno smanjuje rizik"))
         
-        # Internet
         if korisnik['InternetService'] == 'Fiber optic':
             razlozi.append(("🔴", "Fiber optic", "skuplji servis"))
         elif korisnik['InternetService'] == 'DSL':
@@ -213,7 +209,6 @@ if ids:
         else:
             razlozi.append(("🟢", "Nema internet", "manji rizik"))
         
-        # Payment
         if korisnik['PaymentMethod'] == 'Electronic check':
             razlozi.append(("🔴", "Elektronski ček", "nestabilnije plaćanje"))
         else:
@@ -272,7 +267,6 @@ if ids:
         else:
             st.info("📧 Loyalty email sa ponudom – slab odziv na nadogradnju")
 
-    # Istakni najbolju akciju
     st.markdown("---")
     st.markdown(f"### 🏆 Najbolja akcija: **{korisnik['BestAction']}** (uplift {korisnik['UpliftScore']:.0%})")
     st.success(f"💡 Preporuka: Fokusirajte se na **{korisnik['BestAction'].lower()}** – ovaj korisnik će na to najviše reagovati!")
@@ -318,8 +312,10 @@ col_roi4.metric("ROI", f"{roi:.0f}%", delta="Pozitivan" if roi > 0 else "Negativ
 st.markdown(f"""
 ### 📋 Formula:
 - **Očekivani gubitak** = Σ (Churn verovatnoća × Mesečni trošak)
-- **Spašeni prihod** = Očekivani gubitak × Prosečan uplift ({avg_uplift:.0%})
-- **Cena kampanje** = {len(df_risk)} korisnika × ${cost_per_user:.0f} = ${campaign_cost:,.0f}
+- **Prosečan uplift** = {avg_uplift:.0%}
+- **Efektivni uplift** = {avg_uplift:.0%} × {discount_factor:.1f} (faktor popusta) = **{effective_uplift:.0%}**
+- **Spašeni prihod** = ${expected_loss_total:,.0f} × {effective_uplift:.0%} = **${saved_revenue:,.0f}**
+- **Cena kampanje** = {len(df_risk)} korisnika × ${cost_per_user:.0f} = **${campaign_cost:,.0f}**
 - **ROI** = (${saved_revenue:,.0f} - ${campaign_cost:,.0f}) / ${campaign_cost:,.0f} × 100 = **{roi:.0f}%**
 """)
 
@@ -340,7 +336,8 @@ with col_w2:
 df_whatif = df_orig[df_orig['Risk'] >= whatif_prag].sort_values('ExpectedLoss', ascending=False)
 whatif_loss = df_whatif['ExpectedLoss'].sum()
 whatif_uplift = df_whatif['UpliftScore'].mean() if len(df_whatif) > 0 else 0
-whatif_saved = whatif_loss * whatif_uplift
+whatif_effective_uplift = min(whatif_uplift * discount_factor, 0.95)
+whatif_saved = whatif_loss * whatif_effective_uplift
 whatif_campaign = len(df_whatif) * whatif_cost
 whatif_roi = ((whatif_saved - whatif_campaign) / whatif_campaign * 100) if whatif_campaign > 0 else 0
 
@@ -386,6 +383,7 @@ if roi > 0:
     st.success(f"""
 ✅ **Kampanja se isplati!**
 - Sa pragom rizika od **{prag:.0%}** i cenom od **${cost_per_user:.0f}** po korisniku
+- Popustom od **{discount_pct}%** postižemo efektivni uplift od **{effective_uplift:.0%}**
 - Očekivani ROI: **{roi:.0f}%**
 - Spašeni mesečni prihod: **${saved_revenue:,.0f}**
 - Retention tim može da koristi ovaj alat svakodnevno za prioritizaciju korisnika
@@ -394,6 +392,7 @@ else:
     st.warning(f"""
 ⚠️ **Kampanja trenutno nije isplativa** (ROI: {roi:.0f}%)
 - Povećajte prag rizika (trenutno {prag:.0%}) da targetirate samo najrizičnije
+- Povećajte popust (trenutno {discount_pct}%) za veći efektivni uplift
 - Smanjite cenu po korisniku (trenutno ${cost_per_user:.0f})
 - Koristite What-if simulaciju da nađete optimalne parametre
 """)
