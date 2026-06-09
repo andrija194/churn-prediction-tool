@@ -131,25 +131,50 @@ if ids:
     
     with cB:
         st.markdown("### 🧠 SHAP - Zašto je u riziku?")
+        
         st.markdown("**Faktori koji povećavaju rizik:** ⬆️")
+        rizik_ima = False
         
         if korisnik['Contract'] == 'Month-to-month':
             st.markdown("🔴 **Mesečni ugovor** (+25% rizika) - Najjači faktor")
+            rizik_ima = True
         if korisnik['MonthlyCharges'] > df_orig['MonthlyCharges'].median():
             st.markdown("🔴 **Visoki mesečni troškovi** (+15% rizika)")
+            rizik_ima = True
         if korisnik['tenure'] < 12:
             st.markdown("🔴 **Novi korisnik** (+10% rizika)")
+            rizik_ima = True
         if korisnik['InternetService'] == 'Fiber optic':
             st.markdown("🔴 **Fiber optic** (+8% rizika)")
+            rizik_ima = True
         if korisnik['PaymentMethod'] == 'Electronic check':
             st.markdown("🔴 **Elektronski ček** (+5% rizika)")
+            rizik_ima = True
+        
+        if not rizik_ima:
+            st.markdown("🟡 Nema izraženih faktora rizika")
         
         st.markdown("**Faktori koji smanjuju rizik:** ⬇️")
+        zastita_ima = False
         
         if korisnik['tenure'] > 36:
-            st.markdown("🟢 **Lojalan korisnik** (-20% rizika)")
-        if korisnik['Contract'] != 'Month-to-month':
-            st.markdown("🟢 **Ugovorna obaveza** (-25% rizika)")
+            st.markdown("🟢 **Lojalan korisnik** (-20% rizika) - preko 3 godine staža")
+            zastita_ima = True
+        if korisnik['Contract'] == 'Two year':
+            st.markdown("🟢 **Dvogodišnji ugovor** (-25% rizika)")
+            zastita_ima = True
+        if korisnik['Contract'] == 'One year':
+            st.markdown("🟢 **Godišnji ugovor** (-15% rizika)")
+            zastita_ima = True
+        if korisnik['tenure'] > 12 and korisnik['tenure'] <= 36:
+            st.markdown("🟢 **Stabilan staž** (-5% rizika)")
+            zastita_ima = True
+        if korisnik['MonthlyCharges'] <= df_orig['MonthlyCharges'].median():
+            st.markdown("🟢 **Pristupačni troškovi** (-10% rizika)")
+            zastita_ima = True
+        
+        if not zastita_ima:
+            st.markdown("🟡 **Ovaj korisnik nema zaštitnih faktora** - visok prioritet za intervenciju!")
 
     st.markdown("---")
     
