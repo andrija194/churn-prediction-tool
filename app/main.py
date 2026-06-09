@@ -45,17 +45,17 @@ df_orig['ExpectedLoss'] = proba * df_orig['MonthlyCharges']
 df_orig['RiskLevel'] = pd.cut(proba, bins=[0, 0.3, 0.7, 1.01], 
                                labels=['🟢 Nizak', '🟡 Srednji', '🔴 Visok'])
 
-# Uplift skor (simulacija - zasnovana na karakteristikama)
+# Uplift skor
 def calculate_uplift(row):
     uplift = 0.0
     if row['Contract'] == 'Month-to-month':
-        uplift += 0.25  # najviše reaguju na ponudu ugovora
+        uplift += 0.25
     if row['MonthlyCharges'] > 80:
-        uplift += 0.20  # reaguju na popust
+        uplift += 0.20
     if row['tenure'] < 12:
-        uplift += 0.15  # novi korisnici - zadovoljstvo
+        uplift += 0.15
     if row['InternetService'] == 'Fiber optic':
-        uplift += 0.10  # reaguju na nadogradnju
+        uplift += 0.10
     return min(uplift, 0.70)
 
 df_orig['UpliftScore'] = df_orig.apply(calculate_uplift, axis=1)
@@ -64,7 +64,6 @@ df_orig['UpliftScore'] = df_orig.apply(calculate_uplift, axis=1)
 st.sidebar.header("🔍 Filteri")
 prag = st.sidebar.slider("Prag rizika", 0.0, 1.0, 0.5, 0.05)
 
-# ROI kalkulator
 st.sidebar.markdown("---")
 st.sidebar.header("💰 ROI Kalkulator")
 discount_pct = st.sidebar.slider("Popust (%)", 5, 50, 20, 5)
@@ -75,7 +74,7 @@ df_risk = df_orig[df_orig['Risk'] >= prag].sort_values('ExpectedLoss', ascending
 # ROI računica
 expected_loss_total = df_risk['ExpectedLoss'].sum()
 avg_uplift = df_risk['UpliftScore'].mean() if len(df_risk) > 0 else 0
-retention_rate = avg_uplift  # što veći uplift, više korisnika zadržavamo
+retention_rate = avg_uplift
 saved_revenue = expected_loss_total * retention_rate
 campaign_cost = len(df_risk) * cost_per_user
 roi = ((saved_revenue - campaign_cost) / campaign_cost * 100) if campaign_cost > 0 else 0
@@ -111,9 +110,6 @@ ids = df_risk['customerID'].head(30).tolist()
 if ids:
     izabran = st.selectbox("Izaberi korisnika:", ids)
     korisnik = df_risk[df_risk['customerID'] == izabran].iloc[0]
-    
-    # Indeks u originalnom df-u
-    idx = df_orig[df_orig['customerID'] == izabran].index[0]
 
     cA, cB = st.columns(2)
     
@@ -135,8 +131,6 @@ if ids:
     
     with cB:
         st.markdown("### 🧠 SHAP - Zašto je u riziku?")
-        
-        # Simulirani SHAP waterfall (feature-i koji najviše utiču)
         st.markdown("**Faktori koji povećavaju rizik:** ⬆️")
         
         if korisnik['Contract'] == 'Month-to-month':
@@ -230,6 +224,81 @@ st.markdown(f"""
 - **Spašeni prihod** = Očekivani gubitak × Prosečan uplift ({avg_uplift:.0%})
 - **Cena kampanje** = {len(df_risk)} korisnika × ${cost_per_user:.0f} = ${campaign_cost:,.0f}
 - **ROI** = (${saved_revenue:,.0f} - ${campaign_cost:,.0f}) / ${campaign_cost:,.0f} × 100 = **{roi:.0f}%**
+""")
+
+# ===== WHAT-IF SIMULACIJA =====
+st.markdown("---")
+st.subheader("🧪 What-if Simulacija - Testiraj različite strategije")
+
+st.markdown("**Šta ako promenimo parametre kampanje?** Podesite vrednosti da vidite kako se menja isplativost.")
+
+col_w1, col_w2 = st.columns(2)
+with col_w1:
+    whatif_prag = st.slider("🎯 What-if prag rizika", 0.0, 1.0, prag, 0.05, 
+                            help="Šta ako zadržavamo samo korisnike iznad ovog praga?")
+with col_w2:
+    whatif_cost = st.number_input("💵 What-if cena po korisniku ($)", 10, 200, cost_per_user, 10,
+                                  help="Šta ako kampanja košta više/manje po korisniku?")
+
+df_whatif = df_orig[df_orig['Risk'] >= whatif_prag].sort_values('ExpectedLoss', ascending=False)
+whatif_loss = df_whatif['ExpectedLoss'].sum()
+whatif_uplift = df_whatif['UpliftScore'].mean() if len(df_whatif) > 0 else 0
+whatif_saved = whatif_loss * whatif_uplift
+whatif_campaign = len(df_whatif) * whatif_cost
+whatif_roi = ((whatif_saved - whatif_campaign) / whatif_campaign * 100) if whatif_campaign > 0 else 0
+
+st.markdown("---")
+st.markdown("### 📊 Poređenje: Trenutno vs What-if")
+
+col_comp1, col_comp2 = st.columns(2)
+
+with col_comp1:
+    st.markdown("#### 🔵 Trenutna strategija")
+    st.metric("Broj korisnika za intervenciju", len(df_risk))
+    st.metric("Očekivani gubitak", f"${expected_loss_total:,.0f}")
+    st.metric("Cena kampanje", f"${campaign_cost:,.0f}")
+    st.metric("Spašeni prihod", f"${saved_revenue:,.0f}")
+    st.metric("ROI", f"{roi:.0f}%")
+
+with col_comp2:
+    st.markdown("#### 🟠 What-if strategija")
+    delta_users = len(df_whatif) - len(df_risk)
+    delta_loss = whatif_loss - expected_loss_total
+    delta_cost = whatif_campaign - campaign_cost
+    delta_saved = whatif_saved - saved_revenue
+    delta_roi = whatif_roi - roi
+    
+    st.metric("Broj korisnika za intervenciju", len(df_whatif), delta=f"{delta_users:+d}")
+    st.metric("Očekivani gubitak", f"${whatif_loss:,.0f}", delta=f"${delta_loss:+,.0f}")
+    st.metric("Cena kampanje", f"${whatif_campaign:,.0f}", delta=f"${delta_cost:+,.0f}")
+    st.metric("Spašeni prihod", f"${whatif_saved:,.0f}", delta=f"${delta_saved:+,.0f}")
+    st.metric("ROI", f"{whatif_roi:.0f}%", delta=f"{delta_roi:+.0f}%")
+
+if whatif_roi > roi:
+    st.success(f"✅ **What-if strategija je bolja!** ROI se povećava sa {roi:.0f}% na {whatif_roi:.0f}%")
+elif whatif_roi == roi:
+    st.info(f"ℹ️ Strategije su jednake. ROI ostaje {roi:.0f}%")
+else:
+    st.warning(f"⚠️ Trenutna strategija je bolja. What-if ROI opada na {whatif_roi:.0f}%")
+
+# ===== ZAVRŠNI ROI ZAKLJUČAK =====
+st.markdown("---")
+st.subheader("📋 Finalni ROI Zaključak")
+
+if roi > 0:
+    st.success(f"""
+✅ **Kampanja se isplati!**
+- Sa pragom rizika od **{prag:.0%}** i cenom od **${cost_per_user:.0f}** po korisniku
+- Očekivani ROI: **{roi:.0f}%**
+- Spašeni mesečni prihod: **${saved_revenue:,.0f}**
+- Retention tim može da koristi ovaj alat svakodnevno za prioritizaciju korisnika
+""")
+else:
+    st.warning(f"""
+⚠️ **Kampanja trenutno nije isplativa** (ROI: {roi:.0f}%)
+- Povećajte prag rizika (trenutno {prag:.0%}) da targetirate samo najrizičnije
+- Smanjite cenu po korisniku (trenutno ${cost_per_user:.0f})
+- Koristite What-if simulaciju da nađete optimalne parametre
 """)
 
 st.markdown("---")
