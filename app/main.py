@@ -45,20 +45,66 @@ df_orig['ExpectedLoss'] = proba * df_orig['MonthlyCharges']
 df_orig['RiskLevel'] = pd.cut(proba, bins=[0, 0.3, 0.7, 1.01], 
                                labels=['🟢 Nizak', '🟡 Srednji', '🔴 Visok'])
 
-# Uplift skor
+# NOVI UPLIFT MODEL - različiti skorovi za svaku akciju
 def calculate_uplift(row):
-    uplift = 0.0
-    if row['Contract'] == 'Month-to-month':
-        uplift += 0.25
-    if row['MonthlyCharges'] > 80:
-        uplift += 0.20
-    if row['tenure'] < 12:
-        uplift += 0.15
-    if row['InternetService'] == 'Fiber optic':
-        uplift += 0.10
-    return min(uplift, 0.70)
+    """
+    Računa uplift za svaku vrstu intervencije posebno.
+    Vraća (najveći_uplift, ime_najbolje_akcije, dict_sa_svim_upliftovima)
+    """
+    uplift_discount = 0.0
+    uplift_contract = 0.0
+    uplift_premium = 0.0
 
-df_orig['UpliftScore'] = df_orig.apply(calculate_uplift, axis=1)
+    # Popust – visoki troškovi = veća osetljivost na popust
+    if row['MonthlyCharges'] > 90:
+        uplift_discount = 0.35
+    elif row['MonthlyCharges'] > 70:
+        uplift_discount = 0.25
+    elif row['MonthlyCharges'] > 50:
+        uplift_discount = 0.15
+    else:
+        uplift_discount = 0.05
+
+    # Godišnji ugovor – mesečni korisnici najviše reaguju
+    if row['Contract'] == 'Month-to-month':
+        if row['tenure'] < 12:
+            uplift_contract = 0.40   # novi + mesečni → jako reaguju
+        elif row['tenure'] < 24:
+            uplift_contract = 0.30
+        else:
+            uplift_contract = 0.20
+    else:
+        uplift_contract = 0.05  # već ima ugovor, slabo reaguje
+
+    # Premium nadogradnja – fiber korisnici reaguju
+    if row['InternetService'] == 'Fiber optic':
+        if row['MonthlyCharges'] > 80:
+            uplift_premium = 0.30
+        else:
+            uplift_premium = 0.20
+    elif row['InternetService'] == 'DSL':
+        uplift_premium = 0.10
+    else:
+        uplift_premium = 0.02
+
+    uplifts = {
+        'Popust': uplift_discount,
+        'Godišnji ugovor': uplift_contract,
+        'Premium nadogradnja': uplift_premium
+    }
+
+    best_action = max(uplifts, key=uplifts.get)
+    best_uplift = uplifts[best_action]
+
+    return best_uplift, best_action, uplifts
+
+# Primeni uplift i sačuvaj sve vrednosti
+uplift_results = df_orig.apply(calculate_uplift, axis=1)
+df_orig['UpliftScore'] = uplift_results.apply(lambda x: x[0])
+df_orig['BestAction'] = uplift_results.apply(lambda x: x[1])
+df_orig['UpliftDiscount'] = uplift_results.apply(lambda x: x[2]['Popust'])
+df_orig['UpliftContract'] = uplift_results.apply(lambda x: x[2]['Godišnji ugovor'])
+df_orig['UpliftPremium'] = uplift_results.apply(lambda x: x[2]['Premium nadogradnja'])
 
 # ===== SIDEBAR =====
 st.sidebar.header("🔍 Filteri")
@@ -71,11 +117,10 @@ cost_per_user = st.sidebar.number_input("Cena po korisniku ($)", 10, 200, 50, 10
 
 df_risk = df_orig[df_orig['Risk'] >= prag].sort_values('ExpectedLoss', ascending=False)
 
-# ROI računica
+# ROI računica (koristi najbolji uplift)
 expected_loss_total = df_risk['ExpectedLoss'].sum()
 avg_uplift = df_risk['UpliftScore'].mean() if len(df_risk) > 0 else 0
-retention_rate = avg_uplift
-saved_revenue = expected_loss_total * retention_rate
+saved_revenue = expected_loss_total * avg_uplift
 campaign_cost = len(df_risk) * cost_per_user
 roi = ((saved_revenue - campaign_cost) / campaign_cost * 100) if campaign_cost > 0 else 0
 
@@ -91,12 +136,13 @@ st.markdown("---")
 # ===== TABELA SA UPLIFT-om =====
 st.subheader("📋 Rangirana lista rizičnih korisnika (prioritet po očekivanom gubitku)")
 st.dataframe(
-    df_risk[['customerID', 'Risk', 'ExpectedLoss', 'UpliftScore', 'RiskLevel', 
+    df_risk[['customerID', 'Risk', 'ExpectedLoss', 'UpliftScore', 'BestAction', 'RiskLevel', 
              'MonthlyCharges', 'tenure', 'Contract', 'InternetService']],
     column_config={
         "Risk": st.column_config.ProgressColumn("Rizik", format="%.1f%%", min_value=0, max_value=1),
         "ExpectedLoss": st.column_config.NumberColumn("Očekivani gubitak", format="$%.2f"),
         "UpliftScore": st.column_config.ProgressColumn("Uplift", format="%.1f%%", min_value=0, max_value=1),
+        "BestAction": "Najbolja akcija"
     },
     use_container_width=True, hide_index=True, height=400
 )
@@ -106,7 +152,7 @@ st.markdown("---")
 # ===== DETALJI SA SHAP-om =====
 st.subheader("🔍 Detaljna analiza - Zašto će korisnik otići?")
 
-ids = df_risk['customerID'].head(30).tolist()
+ids = df_risk['customerID'].head(100).tolist()
 if ids:
     izabran = st.selectbox("Izaberi korisnika:", ids)
     korisnik = df_risk[df_risk['customerID'] == izabran].iloc[0]
@@ -121,7 +167,7 @@ if ids:
 | ID | {korisnik['customerID']} |
 | Rizik churn-a | **{korisnik['Risk']:.1%}** |
 | Očekivani gubitak | **${korisnik['ExpectedLoss']:,.2f}** |
-| Uplift skor | {korisnik['UpliftScore']:.1%} |
+| Najbolji uplift | **{korisnik['UpliftScore']:.0%}** ({korisnik['BestAction']}) |
 | Mesečni trošak | ${korisnik['MonthlyCharges']:,.2f} |
 | Staž | {korisnik['tenure']} meseci |
 | Ugovor | {korisnik['Contract']} |
@@ -145,9 +191,9 @@ if ids:
         # Monthly Charges
         med = df_orig['MonthlyCharges'].median()
         if korisnik['MonthlyCharges'] > med:
-                        razlozi.append(("🔴", f"Visoki mesečni troškovi", f"${korisnik['MonthlyCharges']:.0f}"))
+            razlozi.append(("🔴", "Visoki mesečni troškovi", f"${korisnik['MonthlyCharges']:.0f}"))
         else:
-                                    razlozi.append(("🟢", f"Pristupačni mesečni troškovi", f"${korisnik['MonthlyCharges']:.0f}"))
+            razlozi.append(("🟢", "Pristupačni mesečni troškovi", f"${korisnik['MonthlyCharges']:.0f}"))
         
         # Tenure
         if korisnik['tenure'] < 12:
@@ -173,11 +219,9 @@ if ids:
         else:
             razlozi.append(("🟢", f"{korisnik['PaymentMethod']}", "stabilnije plaćanje"))
         
-        # Prikaz svih razloga
         for boja, naziv, opis in razlozi:
             st.markdown(f"{boja} **{naziv}** ({opis})")
         
-        # Zaključak
         st.markdown("---")
         crveni = sum(1 for r in razlozi if r[0] == "🔴")
         zeleni = sum(1 for r in razlozi if r[0] == "🟢")
@@ -193,32 +237,45 @@ if ids:
 
     st.markdown("---")
     
-    # ===== PREPORUKE SA UPLIFT-om =====
+    # ===== PREPORUKE SA RAZLIČITIM UPLIFT-om =====
     st.subheader("💡 Predložene akcije sa Uplift modelom")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if korisnik['MonthlyCharges'] > df_orig['MonthlyCharges'].median():
-            response_rate = korisnik['UpliftScore']
-            st.metric("🎯 Popust 20%", f"Uplift: {response_rate:.0%}")
-            st.success(f"Ovaj korisnik će najviše reagovati na **{discount_pct}% popust**")
+        disc_uplift = korisnik['UpliftDiscount']
+        st.metric("🎯 Popust 20%", f"Uplift: {disc_uplift:.0%}")
+        if disc_uplift >= 0.25:
+            st.success(f"Ovaj korisnik će **dobro reagovati** na {discount_pct}% popust")
+        elif disc_uplift >= 0.10:
+            st.info(f"Ovaj korisnik će **umereno reagovati** na popust")
         else:
-            st.info("📞 Poziv za proveru zadovoljstva")
-    
+            st.info("Slab odziv na popust – probajte drugu akciju")
+
     with col2:
-        if korisnik['Contract'] == 'Month-to-month':
-            st.metric("📋 Godišnji ugovor", f"Uplift: {korisnik['UpliftScore']:.0%}")
-            st.success("Ponuditi **godišnji ugovor** sa 15% popustom")
+        cont_uplift = korisnik['UpliftContract']
+        st.metric("📋 Godišnji ugovor", f"Uplift: {cont_uplift:.0%}")
+        if cont_uplift >= 0.25:
+            st.success("Ponuditi **godišnji ugovor** sa 15% popustom – visok odziv!")
+        elif cont_uplift >= 0.10:
+            st.info("Ponuda godišnjeg ugovora – umeren odziv")
         else:
-            st.info("✅ Korisnik već ima ugovor")
-    
+            st.info("✅ Korisnik već ima ugovor – ne isplati se nuditi")
+
     with col3:
-        if korisnik['InternetService'] == 'Fiber optic':
-            st.metric("⬆️ Premium nadogradnja", f"Uplift: {korisnik['UpliftScore']:.0%}")
-            st.success("Besplatna **premium nadogradnja** na 3 meseca")
+        prem_uplift = korisnik['UpliftPremium']
+        st.metric("⬆️ Premium nadogradnja", f"Uplift: {prem_uplift:.0%}")
+        if prem_uplift >= 0.20:
+            st.success("Besplatna **premium nadogradnja** na 3 meseca – odličan odziv!")
+        elif prem_uplift >= 0.10:
+            st.info("Premium nadogradnja – umeren odziv")
         else:
-            st.info("📧 Loyalty email sa ponudom")
+            st.info("📧 Loyalty email sa ponudom – slab odziv na nadogradnju")
+
+    # Istakni najbolju akciju
+    st.markdown("---")
+    st.markdown(f"### 🏆 Najbolja akcija: **{korisnik['BestAction']}** (uplift {korisnik['UpliftScore']:.0%})")
+    st.success(f"💡 Preporuka: Fokusirajte se na **{korisnik['BestAction'].lower()}** – ovaj korisnik će na to najviše reagovati!")
 
     # ===== VIZUALIZACIJE =====
     st.markdown("---")
