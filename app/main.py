@@ -132,49 +132,64 @@ if ids:
     with cB:
         st.markdown("### 🧠 SHAP - Zašto je u riziku?")
         
-        st.markdown("**Faktori koji povećavaju rizik:** ⬆️")
-        rizik_ima = False
+        razlozi = []
         
+        # Contract
         if korisnik['Contract'] == 'Month-to-month':
-            st.markdown("🔴 **Mesečni ugovor** (+25% rizika) - Najjači faktor")
-            rizik_ima = True
-        if korisnik['MonthlyCharges'] > df_orig['MonthlyCharges'].median():
-            st.markdown("🔴 **Visoki mesečni troškovi** (+15% rizika)")
-            rizik_ima = True
+            razlozi.append(("🔴", "Mesečni ugovor", "+25% rizika"))
+        elif korisnik['Contract'] == 'One year':
+            razlozi.append(("🟢", "Godišnji ugovor", "smanjuje rizik"))
+        else:
+            razlozi.append(("🟢", "Dvogodišnji ugovor", "značajno smanjuje rizik"))
+        
+        # Monthly Charges
+        med = df_orig['MonthlyCharges'].median()
+        if korisnik['MonthlyCharges'] > med:
+            razlozi.append(("🔴", f"Visoki troškovi (${korisnik['MonthlyCharges']:.0f})", f"+15% (prosek ${med:.0f})"))
+        else:
+            razlozi.append(("🟢", f"Pristupačni troškovi (${korisnik['MonthlyCharges']:.0f})", f"ispod proseka ${med:.0f}"))
+        
+        # Tenure
         if korisnik['tenure'] < 12:
-            st.markdown("🔴 **Novi korisnik** (+10% rizika)")
-            rizik_ima = True
+            razlozi.append(("🔴", f"Nov korisnik ({korisnik['tenure']} mes.)", "+10% rizika"))
+        elif korisnik['tenure'] < 24:
+            razlozi.append(("🟡", f"Srednji staž ({korisnik['tenure']} mes.)", "umeren rizik"))
+        elif korisnik['tenure'] < 48:
+            razlozi.append(("🟢", f"Stabilan staž ({korisnik['tenure']} mes.)", "smanjuje rizik"))
+        else:
+            razlozi.append(("🟢", f"Lojalan korisnik ({korisnik['tenure']} mes.)", "značajno smanjuje rizik"))
+        
+        # Internet
         if korisnik['InternetService'] == 'Fiber optic':
-            st.markdown("🔴 **Fiber optic** (+8% rizika)")
-            rizik_ima = True
+            razlozi.append(("🔴", "Fiber optic", "skuplji servis"))
+        elif korisnik['InternetService'] == 'DSL':
+            razlozi.append(("🟡", "DSL internet", "srednji rizik"))
+        else:
+            razlozi.append(("🟢", "Nema internet", "manji rizik"))
+        
+        # Payment
         if korisnik['PaymentMethod'] == 'Electronic check':
-            st.markdown("🔴 **Elektronski ček** (+5% rizika)")
-            rizik_ima = True
+            razlozi.append(("🔴", "Elektronski ček", "nestabilnije plaćanje"))
+        else:
+            razlozi.append(("🟢", f"{korisnik['PaymentMethod']}", "stabilnije plaćanje"))
         
-        if not rizik_ima:
-            st.markdown("🟡 Nema izraženih faktora rizika")
+        # Prikaz svih razloga
+        for boja, naziv, opis in razlozi:
+            st.markdown(f"{boja} **{naziv}** ({opis})")
         
-        st.markdown("**Faktori koji smanjuju rizik:** ⬇️")
-        zastita_ima = False
+        # Zaključak
+        st.markdown("---")
+        crveni = sum(1 for r in razlozi if r[0] == "🔴")
+        zeleni = sum(1 for r in razlozi if r[0] == "🟢")
         
-        if korisnik['tenure'] > 36:
-            st.markdown("🟢 **Lojalan korisnik** (-20% rizika) - preko 3 godine staža")
-            zastita_ima = True
-        if korisnik['Contract'] == 'Two year':
-            st.markdown("🟢 **Dvogodišnji ugovor** (-25% rizika)")
-            zastita_ima = True
-        if korisnik['Contract'] == 'One year':
-            st.markdown("🟢 **Godišnji ugovor** (-15% rizika)")
-            zastita_ima = True
-        if korisnik['tenure'] > 12 and korisnik['tenure'] <= 36:
-            st.markdown("🟢 **Stabilan staž** (-5% rizika)")
-            zastita_ima = True
-        if korisnik['MonthlyCharges'] <= df_orig['MonthlyCharges'].median():
-            st.markdown("🟢 **Pristupačni troškovi** (-10% rizika)")
-            zastita_ima = True
-        
-        if not zastita_ima:
-            st.markdown("🟡 **Ovaj korisnik nema zaštitnih faktora** - visok prioritet za intervenciju!")
+        if crveni >= 3:
+            st.error(f"⚠️ **{crveni} faktora rizika** - OBAVEZNA intervencija odmah!")
+        elif crveni == 2:
+            st.warning(f"⚡ **{crveni} faktora rizika** - Visok prioritet")
+        elif crveni == 1:
+            st.info(f"📊 **{crveni} faktor rizika** - Srednji prioritet")
+        else:
+            st.success(f"✅ **Bez izraženih rizika** - {zeleni} zaštitna faktora")
 
     st.markdown("---")
     
