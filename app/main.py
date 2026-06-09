@@ -12,8 +12,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from data_preprocessing import run_preprocessing
 
 # ===== PODEŠAVANJE STRANICE =====
-st.set_page_config(page_title="Churn Predictor", page_icon="🔮", layout="wide")
-st.title("🔮 Churn Prediction Tool")
+st.set_page_config(page_title="Churn Predictor", page_icon="📡", layout="wide")
+st.title("📡 Telekom Churn Predikcija - Ko će nas napustiti?")
 st.markdown("---")
 
 # ===== UČITAVANJE =====
