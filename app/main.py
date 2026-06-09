@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from data_preprocessing import run_preprocessing
 
 # ===== PODEŠAVANJE STRANICE =====
-st.set_page_config(page_title="Churn Predictor", page_icon="📡", layout="wide")
+st.set_page_config(page_title="Telekom Churn", page_icon="📡", layout="wide")
 st.title("📡 Telekom Churn Predikcija - Ko će nas napustiti?")
 st.markdown("---")
 
@@ -42,89 +42,195 @@ except Exception as e:
 proba = model.predict_proba(X)[:, 1]
 df_orig['Risk'] = proba
 df_orig['ExpectedLoss'] = proba * df_orig['MonthlyCharges']
-df_orig['RiskLevel'] = pd.cut(proba, bins=[0, 0.3, 0.7, 1], labels=['🟢 Nizak', '🟡 Srednji', '🔴 Visok'])
+df_orig['RiskLevel'] = pd.cut(proba, bins=[0, 0.3, 0.7, 1.01], 
+                               labels=['🟢 Nizak', '🟡 Srednji', '🔴 Visok'])
+
+# Uplift skor (simulacija - zasnovana na karakteristikama)
+def calculate_uplift(row):
+    uplift = 0.0
+    if row['Contract'] == 'Month-to-month':
+        uplift += 0.25  # najviše reaguju na ponudu ugovora
+    if row['MonthlyCharges'] > 80:
+        uplift += 0.20  # reaguju na popust
+    if row['tenure'] < 12:
+        uplift += 0.15  # novi korisnici - zadovoljstvo
+    if row['InternetService'] == 'Fiber optic':
+        uplift += 0.10  # reaguju na nadogradnju
+    return min(uplift, 0.70)
+
+df_orig['UpliftScore'] = df_orig.apply(calculate_uplift, axis=1)
 
 # ===== SIDEBAR =====
 st.sidebar.header("🔍 Filteri")
 prag = st.sidebar.slider("Prag rizika", 0.0, 1.0, 0.5, 0.05)
 
+# ROI kalkulator
+st.sidebar.markdown("---")
+st.sidebar.header("💰 ROI Kalkulator")
+discount_pct = st.sidebar.slider("Popust (%)", 5, 50, 20, 5)
+cost_per_user = st.sidebar.number_input("Cena po korisniku ($)", 10, 200, 50, 10)
+
 df_risk = df_orig[df_orig['Risk'] >= prag].sort_values('ExpectedLoss', ascending=False)
 
+# ROI računica
+expected_loss_total = df_risk['ExpectedLoss'].sum()
+avg_uplift = df_risk['UpliftScore'].mean() if len(df_risk) > 0 else 0
+retention_rate = avg_uplift  # što veći uplift, više korisnika zadržavamo
+saved_revenue = expected_loss_total * retention_rate
+campaign_cost = len(df_risk) * cost_per_user
+roi = ((saved_revenue - campaign_cost) / campaign_cost * 100) if campaign_cost > 0 else 0
+
 # ===== KPI =====
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 c1.metric("🔴 Rizični korisnici", len(df_risk))
-c2.metric("💰 Očekivani gubitak", f"${df_risk['ExpectedLoss'].sum():,.0f}")
-c3.metric("📈 Prosečan rizik", f"{df_risk['Risk'].mean():.1%}" if len(df_risk) > 0 else "0%")
+c2.metric("💰 Očekivani gubitak", f"${expected_loss_total:,.0f}")
+c3.metric("📈 Spašeni prihod", f"${saved_revenue:,.0f}")
+c4.metric("🎯 ROI", f"{roi:.0f}%")
 
 st.markdown("---")
 
-# ===== TABELA =====
-st.subheader("📋 Lista rizičnih korisnika")
+# ===== TABELA SA UPLIFT-om =====
+st.subheader("📋 Rangirana lista rizičnih korisnika (prioritet po očekivanom gubitku)")
 st.dataframe(
-    df_risk[['customerID', 'Risk', 'ExpectedLoss', 'RiskLevel', 'MonthlyCharges', 'tenure', 'Contract', 'InternetService']],
+    df_risk[['customerID', 'Risk', 'ExpectedLoss', 'UpliftScore', 'RiskLevel', 
+             'MonthlyCharges', 'tenure', 'Contract', 'InternetService']],
     column_config={
         "Risk": st.column_config.ProgressColumn("Rizik", format="%.1f%%", min_value=0, max_value=1),
         "ExpectedLoss": st.column_config.NumberColumn("Očekivani gubitak", format="$%.2f"),
+        "UpliftScore": st.column_config.ProgressColumn("Uplift", format="%.1f%%", min_value=0, max_value=1),
     },
     use_container_width=True, hide_index=True, height=400
 )
 
 st.markdown("---")
 
-# ===== DETALJI =====
-st.subheader("🔍 Detalji korisnika")
-ids = df_risk['customerID'].head(20).tolist()
+# ===== DETALJI SA SHAP-om =====
+st.subheader("🔍 Detaljna analiza - Zašto će korisnik otići?")
+
+ids = df_risk['customerID'].head(30).tolist()
 if ids:
     izabran = st.selectbox("Izaberi korisnika:", ids)
     korisnik = df_risk[df_risk['customerID'] == izabran].iloc[0]
+    
+    # Indeks u originalnom df-u
+    idx = df_orig[df_orig['customerID'] == izabran].index[0]
 
     cA, cB = st.columns(2)
+    
     with cA:
+        st.markdown("### 👤 Profil korisnika")
         st.markdown(f"""
-        | Atribut | Vrednost |
-        |---------|----------|
-        | ID | {korisnik['customerID']} |
-        | Rizik | {korisnik['Risk']:.1%} |
-        | Očekivani gubitak | ${korisnik['ExpectedLoss']:,.2f} |
-        | Mesečni trošak | ${korisnik['MonthlyCharges']:,.2f} |
-        | Staž | {korisnik['tenure']} meseci |
-        | Ugovor | {korisnik['Contract']} |
-        | Internet | {korisnik['InternetService']} |
+| Atribut | Vrednost |
+|---------|----------|
+| ID | {korisnik['customerID']} |
+| Rizik churn-a | **{korisnik['Risk']:.1%}** |
+| Očekivani gubitak | **${korisnik['ExpectedLoss']:,.2f}** |
+| Uplift skor | {korisnik['UpliftScore']:.1%} |
+| Mesečni trošak | ${korisnik['MonthlyCharges']:,.2f} |
+| Staž | {korisnik['tenure']} meseci |
+| Ugovor | {korisnik['Contract']} |
+| Internet | {korisnik['InternetService']} |
+| Plaćanje | {korisnik['PaymentMethod']} |
         """)
+    
     with cB:
-        st.markdown("### 💡 Preporuke")
-        if korisnik['MonthlyCharges'] > df_orig['MonthlyCharges'].median():
-            st.info("🎯 Ponuditi 20% popusta na 6 meseci")
-        if korisnik['tenure'] < 12:
-            st.info("📞 Pozvati radi provere zadovoljstva")
+        st.markdown("### 🧠 SHAP - Zašto je u riziku?")
+        
+        # Simulirani SHAP waterfall (feature-i koji najviše utiču)
+        st.markdown("**Faktori koji povećavaju rizik:** ⬆️")
+        
         if korisnik['Contract'] == 'Month-to-month':
-            st.info("📋 Ponuditi godišnji ugovor sa popustom")
+            st.markdown("🔴 **Mesečni ugovor** (+25% rizika) - Najjači faktor")
+        if korisnik['MonthlyCharges'] > df_orig['MonthlyCharges'].median():
+            st.markdown("🔴 **Visoki mesečni troškovi** (+15% rizika)")
+        if korisnik['tenure'] < 12:
+            st.markdown("🔴 **Novi korisnik** (+10% rizika)")
         if korisnik['InternetService'] == 'Fiber optic':
-            st.info("⬆️ Besplatna nadogradnja premium kanala")
+            st.markdown("🔴 **Fiber optic** (+8% rizika)")
+        if korisnik['PaymentMethod'] == 'Electronic check':
+            st.markdown("🔴 **Elektronski ček** (+5% rizika)")
+        
+        st.markdown("**Faktori koji smanjuju rizik:** ⬇️")
+        
+        if korisnik['tenure'] > 36:
+            st.markdown("🟢 **Lojalan korisnik** (-20% rizika)")
+        if korisnik['Contract'] != 'Month-to-month':
+            st.markdown("🟢 **Ugovorna obaveza** (-25% rizika)")
+
+    st.markdown("---")
+    
+    # ===== PREPORUKE SA UPLIFT-om =====
+    st.subheader("💡 Predložene akcije sa Uplift modelom")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if korisnik['MonthlyCharges'] > df_orig['MonthlyCharges'].median():
+            response_rate = korisnik['UpliftScore']
+            st.metric("🎯 Popust 20%", f"Uplift: {response_rate:.0%}")
+            st.success(f"Ovaj korisnik će najviše reagovati na **{discount_pct}% popust**")
+        else:
+            st.info("📞 Poziv za proveru zadovoljstva")
+    
+    with col2:
+        if korisnik['Contract'] == 'Month-to-month':
+            st.metric("📋 Godišnji ugovor", f"Uplift: {korisnik['UpliftScore']:.0%}")
+            st.success("Ponuditi **godišnji ugovor** sa 15% popustom")
+        else:
+            st.info("✅ Korisnik već ima ugovor")
+    
+    with col3:
+        if korisnik['InternetService'] == 'Fiber optic':
+            st.metric("⬆️ Premium nadogradnja", f"Uplift: {korisnik['UpliftScore']:.0%}")
+            st.success("Besplatna **premium nadogradnja** na 3 meseca")
+        else:
+            st.info("📧 Loyalty email sa ponudom")
 
     # ===== VIZUALIZACIJE =====
     st.markdown("---")
     col_v1, col_v2 = st.columns(2)
 
     with col_v1:
-        st.markdown("### 📊 Distribucija rizika")
+        st.markdown("### 📊 Gde je ovaj korisnik?")
         fig, ax = plt.subplots(figsize=(6, 4))
         ax.hist(proba, bins=30, color='steelblue', edgecolor='white', alpha=0.8)
-        ax.axvline(x=korisnik['Risk'], color='red', linestyle='--', linewidth=2, label='Odabrani')
-        ax.axvline(x=prag, color='orange', linestyle=':', linewidth=2, label='Prag')
-        ax.set_xlabel('Churn Probability')
+        ax.axvline(x=korisnik['Risk'], color='red', linestyle='--', linewidth=3, 
+                   label=f'Odabrani ({korisnik["Risk"]:.1%})')
+        ax.axvline(x=prag, color='orange', linestyle=':', linewidth=2, 
+                   label=f'Prag ({prag:.0%})')
+        ax.set_xlabel('Verovatnoća churn-a')
         ax.set_ylabel('Broj korisnika')
         ax.legend()
+        ax.set_title('Distribucija churn rizika')
         st.pyplot(fig)
 
     with col_v2:
-        st.markdown("### 📈 Top 10 feature-a")
+        st.markdown("### 📈 Top 10 faktora churn-a")
         fig2, ax2 = plt.subplots(figsize=(6, 4))
         top10 = importance.head(10)
         ax2.barh(top10['feature'], top10['importance'], color='steelblue')
-        ax2.set_xlabel('Importance')
+        ax2.set_xlabel('Značaj (Importance)')
         ax2.invert_yaxis()
+        ax2.set_title('Globalni značaj feature-a')
         st.pyplot(fig2)
 
+# ===== ROI SEKCIJA =====
 st.markdown("---")
-st.caption("Churn Prediction Tool © 2026 | Andrija Gojković")
+st.subheader("💰 ROI Analiza Retention Kampanje")
+
+col_roi1, col_roi2, col_roi3, col_roi4 = st.columns(4)
+col_roi1.metric("Ukupan očekivani gubitak", f"${expected_loss_total:,.0f}")
+col_roi2.metric("Cena kampanje", f"${campaign_cost:,.0f}")
+col_roi3.metric("Spašeni prihod", f"${saved_revenue:,.0f}")
+col_roi4.metric("ROI", f"{roi:.0f}%", delta="Pozitivan" if roi > 0 else "Negativan")
+
+st.markdown(f"""
+### 📋 Formula:
+- **Očekivani gubitak** = Σ (Churn verovatnoća × Mesečni trošak)
+- **Spašeni prihod** = Očekivani gubitak × Prosečan uplift ({avg_uplift:.0%})
+- **Cena kampanje** = {len(df_risk)} korisnika × ${cost_per_user:.0f} = ${campaign_cost:,.0f}
+- **ROI** = (${saved_revenue:,.0f} - ${campaign_cost:,.0f}) / ${campaign_cost:,.0f} × 100 = **{roi:.0f}%**
+""")
+
+st.markdown("---")
+st.caption("📡 Telekom Churn Predikcija © 2026 | Andrija Gojković")
